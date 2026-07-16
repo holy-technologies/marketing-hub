@@ -363,7 +363,8 @@ body.editing [contenteditable="true"] {
 <div class="edit-toolbar">
   <span class="edit-toolbar-label">Edit mode</span>
   <button class="toolbar-btn" id="btn-add-section">Add section</button>
-  <button class="toolbar-btn primary" id="btn-download">Download updated file</button>
+  <button class="toolbar-btn" id="btn-download">Download backup</button>
+  <button class="toolbar-btn primary" id="btn-publish">Publish to live site</button>
 </div>
 
 <header class="hub-header">
@@ -629,7 +630,102 @@ document.getElementById('btn-download').addEventListener('click', function () {
   render(true);
 });
 
-// ---- 5. First draw ----
+// ---- 5. Publish straight to GitHub ----
+// Where the live site lives. Change these if the repo ever moves.
+var GITHUB = {
+  owner: 'holy-technologies',
+  repo: 'marketing-hub',
+  path: 'index.html',
+  branch: 'main'
+};
+
+// Builds the full HTML of the page with current edits baked in
+// (same steps as the download button)
+function buildHtml() {
+  document.getElementById('hub-data').textContent =
+    '\n' + JSON.stringify(data, null, 2) + '\n';
+  document.body.classList.remove('editing');
+  render(false);
+  var html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+  document.body.classList.add('editing');
+  render(true);
+  return html;
+}
+
+// Turns text into the base64 format the GitHub API expects
+function toBase64(text) {
+  var bytes = new TextEncoder().encode(text);
+  var bin = '';
+  bytes.forEach(function (b) { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+
+// Gets the saved token, or asks for it the first time
+function getToken() {
+  var token = localStorage.getItem('hub-github-token');
+  if (!token) {
+    token = prompt('Paste your GitHub access token (asked only once, stays on this computer):');
+    if (token) { localStorage.setItem('hub-github-token', token.trim()); }
+  }
+  return token;
+}
+
+document.getElementById('btn-publish').addEventListener('click', function () {
+  var token = getToken();
+  if (!token) { return; }
+
+  var apiUrl = 'https://api.github.com/repos/' + GITHUB.owner + '/' + GITHUB.repo +
+               '/contents/' + GITHUB.path;
+  var headers = {
+    'Authorization': 'Bearer ' + token,
+    'Accept': 'application/vnd.github+json'
+  };
+  var btn = this;
+  btn.textContent = 'Publishing...';
+  btn.disabled = true;
+
+  function done(message) {
+    btn.textContent = 'Publish to live site';
+    btn.disabled = false;
+    alert(message);
+  }
+
+  // Step 1: ask GitHub for the current file's id (its "sha"),
+  // which GitHub requires before accepting an update
+  fetch(apiUrl + '?ref=' + GITHUB.branch, { headers: headers })
+    .then(function (res) {
+      if (res.status === 401) { throw new Error('badtoken'); }
+      if (!res.ok) { throw new Error('HTTP ' + res.status); }
+      return res.json();
+    })
+    .then(function (file) {
+      // Step 2: send the updated page
+      return fetch(apiUrl, {
+        method: 'PUT',
+        headers: headers,
+        body: JSON.stringify({
+          message: 'Update marketing hub via edit mode',
+          content: toBase64(buildHtml()),
+          sha: file.sha,
+          branch: GITHUB.branch
+        })
+      });
+    })
+    .then(function (res) {
+      if (!res.ok) { throw new Error('HTTP ' + res.status); }
+      done('Published! The live page updates in a minute or two.');
+    })
+    .catch(function (err) {
+      if (err.message === 'badtoken') {
+        localStorage.removeItem('hub-github-token');
+        done('That token was not accepted. Click Publish again and paste a fresh one.');
+      } else {
+        done('Publishing failed (' + err.message + '). Your edits are still on screen. You can use Download backup instead.');
+      }
+    });
+});
+
+// ---- 6. First draw ----
 render(editMode);
 </script>
 
